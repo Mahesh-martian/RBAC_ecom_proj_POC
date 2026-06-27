@@ -1,0 +1,42 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+RAGAppenv/
+
+# ===== Secrets / environment =====
+# Never commit real credentials. Example files are allowed.
+.env
+*.env
+!*.env.example
+# Contains real Azure credentials locally — keep out of git.
+ecom/.env.example
+
+# ===== Node / frontend =====
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===== Misc =====
+.DS_Store
+Thumbs.db
+*.log
+chroma_store/

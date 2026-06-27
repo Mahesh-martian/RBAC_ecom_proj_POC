@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "projectName": {
+      "value": "shopease"
+    },
+    "environment": {
+      "value": "prod"
+    },
+    "location": {
+      "value": "eastus"
+    },
+    "imageTag": {
+      "value": "latest"
+    },
+    "azureOpenAiEndpoint": {
+      "value": ""
+    },
+    "azureOpenAiChatDeployment": {
+      "value": "gpt-chat-latest-test-dep"
+    },
+    "azureOpenAiEmbeddingDeployment": {
+      "value": "text-embedding-ada-002"
+    },
+    "azureOpenAiApiVersion": {
+      "value": "2024-12-01-preview"
+    },
+    "azureSearchEndpoint": {
+      "value": ""
+    }
+  }
+}

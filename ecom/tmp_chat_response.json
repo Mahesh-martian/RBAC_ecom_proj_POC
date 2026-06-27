@@ -1,0 +1,12 @@
+{
+  "answer": "Based on our policy documents:\n- Support channels: - Use in-app support chat for product and policy questions. - Provide order number for faster help on shipping, cancellation, or returns.\n- # Returns and Refunds Policy\n- You can request a return within 30 days from the delivery date.\nIf you share your order number, I can guide you through the exact next step.",
+  "recommendations": [],
+  "citations": [
+    "Account and Customer Support Policy (account_and_support.md)",
+    "Returns and Refunds Policy (returns_and_refunds.md)"
+  ],
+  "conversation_id": null,
+  "response_type": "policy_support",
+  "provider": "local",
+  "confidence": 3.0
+}

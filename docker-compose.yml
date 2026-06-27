@@ -1,0 +1,171 @@
+# Root compose: full ShopEase + RAG microservices stack for local / staging.
+#
+#   docker compose up --build
+#
+# Services:
+#   postgres      - shared DB (databases: shopease, ecommerce)
+#   redis         - cache / rate-limit / future SSE pub-sub
+#   shopease-api  - FastAPI e-commerce backend   (host :5002)
+#   rag-api       - FastAPI RAG service (ecom)     (host :8000)
+#   frontend      - Next.js storefront             (host :3000)
+#
+# The browser calls shopease-api at localhost:5002 (published port); inter-service
+# calls (rag-api -> shopease-api) use the compose network DNS name.
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: shopease-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shopease
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shopease-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: shopease-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - shopease-net
+
+  shopease-api:
+    build:
+      context: ./shopease_backend
+      dockerfile: Dockerfile
+    container_name: shopease-api
+    environment:
+      PORT: "5002"
+      NODE_ENV: development
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/shopease
+      JWT_SECRET: dev-access-secret-change-me
+      JWT_REFRESH_TOKEN_SECRET: dev-refresh-secret-change-me
+      JWT_RESET_PASS_TOKEN: dev-reset-secret-change-me
+      ADMIN_EMAIL: admin@shopease.com
+      ADMIN_PASSWORD: Admin1234
+      CORS_ORIGINS: "http://localhost:3000,http://localhost:5173"
+      # Shopping-assistant chatbot is powered by the RAG service (no external key needed).
+      RAG_SERVICE_URL: http://rag-api:8000
+    ports:
+      - "5002:5002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - shopease-net
+
+  rag-api:
+    build:
+      context: ./ecom
+      dockerfile: Dockerfile
+    container_name: shopease-rag-api
+    # Azure RAG credentials (Azure OpenAI + AI Search) are loaded from ecom/.env
+    # which is gitignored. environment: values below override any .env duplicates.
+    env_file:
+      - ./ecom/.env
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ecommerce
+      JWT_SECRET: dev-rag-secret-change-me-minimum-32-chars
+      # Shared with shopease-api's JWT_SECRET so the RAG service can verify the
+      # storefront access token and derive the caller's authoritative role for RBAC.
+      SHOPEASE_JWT_SECRET: dev-access-secret-change-me
+      # RAG product recommendations sourced from shopease-api over the compose network.
+      SHOPEASE_PRODUCTS_ENABLED: "true"
+      SHOPEASE_API_URL: http://shopease-api:5002/api/v1
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:5173"]'
+      # Event bus for async fulfilment (Redis Streams locally; Service Bus in Azure).
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      shopease-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - shopease-net
+
+  # Async event worker: consumes order/payment events from the bus and performs
+  # idempotent side effects (inventory decrement, confirmation email) off the
+  # request path. Shares the ecom image; runs worker.py instead of the API.
+  worker:
+    build:
+      context: ./ecom
+      dockerfile: Dockerfile
+    container_name: shopease-worker
+    command: ["python", "-m", "worker"]
+    env_file:
+      - ./ecom/.env
+    environment:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ecommerce
+      JWT_SECRET: dev-rag-secret-change-me-minimum-32-chars
+      REDIS_URL: redis://redis:6379/0
+    # The worker has no HTTP server; disable the image's curl-based health check.
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - shopease-net
+
+  frontend:
+    build:
+      context: ./ShopEase/frontend
+      dockerfile: Dockerfile
+    container_name: shopease-frontend
+    environment:
+      NODE_ENV: production
+      # Must match shopease-api's JWT_SECRET so the Next.js middleware can verify
+      # the access-token cookie issued at login. Mismatch/absence => 500 on /dashboard/*.
+      NEXT_JWT_SECRET: dev-access-secret-change-me
+    ports:
+      - "3000:3000"
+    depends_on:
+      shopease-api:
+        condition: service_healthy
+    networks:
+      - shopease-net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  shopease-net:
+    driver: bridge

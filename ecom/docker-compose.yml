@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ecommerce-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecommerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ecommerce-network
+
+  # E-Commerce API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ecommerce-api
+    env_file:
+      - ..\production_rag\.env
+    environment:
+      ENVIRONMENT: development
+      AZURE_KEYVAULT_URL: https://testvaultpracdemo.vault.azure.net/
+      DEBUG: "true"
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ecommerce
+      JWT_SECRET: dev-secret-key-minimum-32-chars-long-xxxx
+      STRIPE_API_KEY: sk_test_local
+      STRIPE_READINESS_URL: https://api.stripe.com/v1/charges?limit=1
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:3001","http://localhost:5173"]'
+      RAG_CHAT_API_URL: http://rag-api:8000
+      RAG_CHAT_API_KEY: local-rag-service-key-change-me
+      RAG_ADMIN_API_KEY: 2u9VnQ8mL4xD7kSa1cPf0TzY6rHb3JwNe5gKu2Mx9qLd4ByF8tCs7ZvRp1Nh6WmQ
+      REQUEST_MAX_BODY_MB: "2"
+      AUTH_REQUEST_MAX_BODY_KB: "64"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rag-api:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    command: >
+      sh -c "pip install -e . &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    networks:
+      - ecommerce-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Split RAG API service (local production-like topology)
+  rag-api:
+    build:
+      context: ..\production_rag
+      dockerfile: Dockerfile
+      target: final
+    container_name: ecommerce-rag-api
+    env_file:
+      - ..\production_rag\.env
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: INFO
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
+    ports:
+      - "8001:8000"
+    networks:
+      - ecommerce-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/live', timeout=2).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  ecommerce-network:
+    driver: bridge
