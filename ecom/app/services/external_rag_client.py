@@ -172,7 +172,7 @@ class ExternalRAGClient:
         if not self.enabled:
             return 0
 
-        files = sorted(policies_dir.glob("*.md"))
+        files = sorted(policies_dir.rglob("*.md"))
         if not files:
             return 0
 
@@ -186,6 +186,8 @@ class ExternalRAGClient:
         total_chunks = 0
         async with httpx.AsyncClient(timeout=max(self._timeout_seconds, 15.0)) as client:
             for file_path in files:
+                rel = file_path.relative_to(policies_dir).as_posix()
+                doc_slug = rel.removesuffix(".md").replace("/", "-")
                 raw = file_path.read_text(encoding="utf-8").strip()
                 if not raw:
                     continue
@@ -194,13 +196,13 @@ class ExternalRAGClient:
                 title = first_line.lstrip("# ").strip() or file_path.stem
                 payload: dict[str, Any] = {
                     "content": raw,
-                    "document_id": f"policy-{file_path.stem}",
+                    "document_id": f"policy-{doc_slug}",
                     "title": title,
-                    "source": file_path.name,
+                    "source": rel,
                     "category": "policy",
                     "metadata": {
                         "ingest_source": "ecom-admin",
-                        "policy_file": file_path.name,
+                        "policy_file": rel,
                     },
                 }
 

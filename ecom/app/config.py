@@ -46,7 +46,12 @@ class Settings(BaseSettings):
     
     # CORS
     cors_origins: List[str] = Field(
-        default=["http://localhost:3000", "http://localhost:5173"],
+        default=[
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ],
         description="Allowed CORS origins"
     )
     cors_credentials: bool = Field(default=True)
@@ -90,6 +95,12 @@ class Settings(BaseSettings):
     azure_search_semantic_config: str = Field(default="support-semantic")
     azure_search_vector_dimensions: int = Field(default=1536)
 
+    # Dedicated embedding endpoint (Azure AI Foundry / Azure AI Inference) for models
+    # not served by Azure OpenAI, e.g. Cohere ``embed-v-4-0``. When both are set, all
+    # embedding calls use this endpoint instead of the Azure OpenAI resource.
+    azure_embedding_endpoint: Optional[str] = Field(default=None)
+    azure_embedding_api_key: Optional[str] = Field(default=None)
+
     # RAG behavior
     rag_provider: str = Field(default="local", description="local|azure|hybrid")
     rag_top_k: int = Field(default=3)
@@ -110,6 +121,10 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = Field(default="INFO")
     log_format: str = Field(default="json")  # json or text
+    # When true, emit verbose per-step RAG logs (embed/retrieve/prompt/llm) at INFO.
+    # When false, those step logs are only emitted if the logger is at DEBUG level,
+    # so production stays quiet by default.
+    rag_step_logging: bool = Field(default=False)
     
     # Email/Notifications
     email_provider: str = Field(default="sendgrid")  # sendgrid or azure_communication_services
@@ -138,7 +153,7 @@ class Settings(BaseSettings):
         description="ShopEase backend base URL including /api/v1, e.g. http://localhost:5002/api/v1",
     )
     shopease_api_timeout_seconds: float = Field(default=8.0)
-    shopease_default_currency: str = Field(default="USD")
+    shopease_default_currency: str = Field(default="INR")
     
     model_config = SettingsConfigDict(
         env_file=".env",

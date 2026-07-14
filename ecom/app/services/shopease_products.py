@@ -75,6 +75,7 @@ async def _search_once(
     search_term: str,
     category: Optional[str],
     limit: int,
+    max_price: Optional[float] = None,
 ) -> list[ChatRecommendation]:
     """Run a single ShopEase ``/products`` query for one search term."""
     base_url = settings.shopease_api_url
@@ -111,8 +112,12 @@ async def _search_once(
             if cat_name and wanted_category not in str(cat_name).lower():
                 continue
         rec = _normalize_product(raw)
-        if rec is not None:
-            recommendations.append(rec)
+        if rec is None:
+            continue
+        # Honor a budget ceiling ("under 100") against the final, discounted price.
+        if max_price is not None and rec.price > max_price:
+            continue
+        recommendations.append(rec)
         if len(recommendations) >= limit:
             break
 
@@ -124,6 +129,7 @@ async def search_products(
     search_terms: list[str],
     category: Optional[str] = None,
     limit: int = 3,
+    max_price: Optional[float] = None,
 ) -> list[ChatRecommendation]:
     """Query the ShopEase catalog for each search term and merge unique results.
 
@@ -141,7 +147,9 @@ async def search_products(
     merged: list[ChatRecommendation] = []
     seen_ids: set[str] = set()
     for term in terms:
-        for rec in await _search_once(search_term=term, category=category, limit=limit):
+        for rec in await _search_once(
+            search_term=term, category=category, limit=limit, max_price=max_price
+        ):
             if rec.id in seen_ids:
                 continue
             seen_ids.add(rec.id)

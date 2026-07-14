@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
+import { logout } from "./authSlice";
 
 export interface ChatRecommendation {
   id: string;
@@ -98,6 +99,17 @@ const chatSlice = createSlice({
       state.conversationId = null;
       saveChatToLocalStorage(state);
     },
+  },
+  extraReducers: (builder) => {
+    // Wipe the conversation (and the personalized greeting/name) on logout so a
+    // signed-out user never sees the previous account's chat history.
+    builder.addCase(logout, (state) => {
+      state.conversations = [];
+      state.conversationId = null;
+      if (typeof window !== "undefined") {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    });
   },
 });
 

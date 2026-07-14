@@ -16,6 +16,7 @@ import threading
 from openai import AzureOpenAI
 
 from app.config import settings
+from app.logging_utils import log_step
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +137,10 @@ class SemanticRouter:
         return self._min_confidence
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
-        assert self._client is not None
-        response = self._client.embeddings.create(model=self._deployment, input=texts)
-        return [d.embedding for d in sorted(response.data, key=lambda d: d.index)]
+        from app.services.embedding_provider import embed_texts
+
+        # Symmetric similarity (query vs anchor utterances): use the neutral text type.
+        return embed_texts(texts, kind="text")
 
     def _ensure_loaded(self) -> None:
         if self._loaded or not self._azure_ready:
@@ -192,6 +194,14 @@ class SemanticRouter:
                 if intent_score > best_score:
                     best_score = intent_score
                     best_intent = intent
+            log_step(
+                logger,
+                "route_classify",
+                enabled=settings.rag_step_logging,
+                intent=best_intent,
+                score=round(best_score, 4),
+                mode="semantic",
+            )
             return best_intent, round(best_score, 4), "semantic"
         except Exception as exc:  # noqa: BLE001 - degrade gracefully to keywords
             logger.warning("SemanticRouter falling back to keywords: %r", exc)

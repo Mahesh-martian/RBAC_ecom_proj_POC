@@ -20,6 +20,7 @@ from app.schemas import (
     ChatQueryRequest,
     ChatQueryResponse,
     ChatRecommendation,
+    ChatUsage,
 )
 from app.config import settings
 from app.services.langchain_support_rag import LangChainSupportRAGService
@@ -209,6 +210,20 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
     lowered_query = query_text.lower()
     normalized_query = re.sub(r"[^a-z0-9\s]", " ", lowered_query)
 
+    # Parse an optional price ceiling so budget phrasing ("running shoes under 100",
+    # "below \u20b950", "less than 200") actually constrains the recommendations.
+    max_price: Optional[float] = None
+    budget_match = re.search(
+        r"(?:under|below|less than|upto|up to|within|at most|no more than|max)\s*"
+        r"(?:rs\.?|inr|usd|\$|\u20b9)?\s*(\d+(?:\.\d+)?)",
+        lowered_query,
+    )
+    if budget_match:
+        try:
+            max_price = float(budget_match.group(1))
+        except ValueError:
+            max_price = None
+
     # Resolve the caller's authoritative role (token-verified when a shared secret
     # is configured) and personalize replies with their name.
     role, resolved_name = _resolve_role_and_name(request_context, request)
@@ -241,8 +256,16 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
     stop_words = {
         "a", "an", "and", "are", "for", "from", "get", "i", "in", "is", "it", "me", "my",
         "need", "please", "recommend", "show", "something", "the", "to", "want", "with", "you",
+        # Budget/price phrasing is handled by the price parser above, not as search keywords.
+        "under", "below", "less", "than", "up", "upto", "within", "max", "most", "more",
+        "no", "or", "cheap", "cheaper", "budget", "price", "priced", "cost", "around", "about",
+        "rs", "inr", "usd",
     }
-    raw_tokens = [t for t in normalized_query.split() if len(t) >= 2 and t not in stop_words]
+    raw_tokens = [
+        t
+        for t in normalized_query.split()
+        if len(t) >= 2 and t not in stop_words and not t.isdigit()
+    ]
     tokens: list[str] = []
     for token in raw_tokens:
         tokens.append(token)
@@ -278,26 +301,20 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
 
     # Support-family intents are grounded in policy docs via the RAG service.
     if intent in support_intents and not forced_product:
-        # Prefer the Azure-backed LangChain RAG when configured; otherwise fall back
-        # to the keyless local policy retriever so policy questions still work.
-        if langchain_support_rag.is_configured:
-            langchain_result = await langchain_support_rag.answer(
-                query_text,
-                top_k=settings.rag_top_k,
-                user_name=first_name or None,
-                history=[(m.role, m.text) for m in request.history],
-                audiences=audiences,
-                persona=persona,
-            )
-            answer = langchain_result.answer
-            citations = langchain_result.citations
-            confidence = langchain_result.confidence
-            provider = "langchain-local"
-        else:
-            answer, citations, confidence = await asyncio.to_thread(
-                support_rag.answer, query_text, settings.rag_top_k, audiences
-            )
-            provider = "local"
+        # Single RAG path: Azure AI Search retrieval + Azure OpenAI generation,
+        # scoped to the caller's audiences for RBAC. No local fallback.
+        langchain_result = await langchain_support_rag.answer(
+            query_text,
+            top_k=settings.rag_top_k,
+            user_name=first_name or None,
+            history=[(m.role, m.text) for m in request.history],
+            audiences=audiences,
+            persona=persona,
+        )
+        answer = langchain_result.answer
+        citations = langchain_result.citations
+        confidence = langchain_result.confidence
+        provider = "langchain-azure"
         logger.info(
             "chat_support query=%s intent=%s provider=%s role=%s confidence=%s citations=%s",
             query_text,
@@ -307,6 +324,17 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
             confidence,
             len(citations),
         )
+        logger.info(
+            "chat_usage query=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s "
+            "retrieval_count=%s search_latency_ms=%s llm_latency_ms=%s",
+            query_text,
+            langchain_result.prompt_tokens,
+            langchain_result.completion_tokens,
+            langchain_result.total_tokens,
+            langchain_result.retrieval_count,
+            langchain_result.search_latency_ms,
+            langchain_result.llm_latency_ms,
+        )
         return ChatQueryResponse(
             answer=answer,
             recommendations=[],
@@ -315,6 +343,14 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
             response_type="policy_support",
             provider=provider,
             confidence=confidence,
+            usage=ChatUsage(
+                prompt_tokens=langchain_result.prompt_tokens,
+                completion_tokens=langchain_result.completion_tokens,
+                total_tokens=langchain_result.total_tokens,
+                retrieval_count=langchain_result.retrieval_count,
+                search_latency_ms=langchain_result.search_latency_ms,
+                llm_latency_ms=langchain_result.llm_latency_ms,
+            ),
         )
 
     # Greeting (or ambiguous non-shopping query): guide instead of dumping products.
@@ -340,6 +376,8 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
         .where(Product.is_active.is_(True), Product.stock_qty > 0)
         .order_by(Product.rating.desc(), Product.created_at.desc())
     )
+    if max_price is not None:
+        base_stmt = base_stmt.where(Product.price <= max_price)
 
     category_names: set[str] = set(matched_category_names)
     if request.category:
@@ -356,6 +394,7 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
             search_terms=tokens or [query_text],
             category=request.category,
             limit=settings.rag_top_k,
+            max_price=max_price,
         )
         logger.info(
             "chat_product source=shopease query=%s results=%s",
@@ -421,6 +460,8 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
             .order_by(Product.rating.desc(), Product.created_at.desc())
             .limit(3)
         )
+        if max_price is not None:
+            fallback_stmt = fallback_stmt.where(Product.price <= max_price)
         if category_ids:
             fallback_stmt = fallback_stmt.where(Product.category_id.in_(category_ids))
         fallback_result = await session.execute(fallback_stmt)

@@ -16,6 +16,9 @@ python-json-logger==3.2.1
 tenacity==9.0.0
 openai==1.58.1
 azure-search-documents==11.6.0b9
+azure-ai-inference==1.0.0b9  # Azure AI Foundry embeddings (e.g. Cohere embed-v-4-0)
+azure-monitor-opentelemetry==1.6.4  # App Insights export (traces/logs/metrics); optional, guarded import
+aiohttp==3.11.11  # async transport required by azure-search-documents AsyncSearchClient
 langchain-core==1.2.18
 langchain-text-splitters==1.1.1
 numpy==2.2.1

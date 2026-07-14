@@ -11,6 +11,8 @@ from datetime import datetime
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.logging_utils import request_id_ctx
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +27,11 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
         """
         # Generate or retrieve correlation ID
         request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
-        
+
+        # Bind the correlation id so every log emitted while handling this request
+        # (including per-step RAG logs) carries the same request_id.
+        ctx_token = request_id_ctx.set(request_id)
+
         # Start timer
         start_time = time.time()
         
@@ -81,3 +87,7 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             
             logger.error(json.dumps(log_data), exc_info=True)
             raise
+        finally:
+            # Unbind the correlation id so it does not leak to the next request
+            # served on this worker/coroutine.
+            request_id_ctx.reset(ctx_token)

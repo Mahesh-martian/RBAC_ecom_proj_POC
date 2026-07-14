@@ -341,6 +341,16 @@ class ChatRecommendation(BaseModel):
     image_url: Optional[str] = None
 
 
+class ChatUsage(BaseModel):
+    """Azure usage metrics for a single chat/RAG response."""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    retrieval_count: int = 0
+    search_latency_ms: float = 0.0
+    llm_latency_ms: float = 0.0
+
+
 class ChatQueryResponse(BaseModel):
     """Chat response payload."""
     answer: str
@@ -350,6 +360,7 @@ class ChatQueryResponse(BaseModel):
     response_type: str = "general"  # general | policy_support | product
     provider: str = "local"  # local | azure | hybrid
     confidence: Optional[float] = None
+    usage: Optional[ChatUsage] = None
 
 
 class ChatProviderComparison(BaseModel):

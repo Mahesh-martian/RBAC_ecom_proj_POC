@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +34,8 @@ except ModuleNotFoundError:
     _AZURE_SDK_AVAILABLE = False
 
 from app.config import Settings
+from app.services.embedding_provider import aembed_texts
+from app.services.usage_metrics import usage_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -81,21 +85,50 @@ class AzureSupportRAGService:
         return self._enabled
 
     def ensure_index(self) -> None:
-        """Create index if missing."""
+        """Create the index if missing, or non-destructively add the ``audience`` field.
+
+        Adding a field is a backward-compatible schema change. To avoid the "cannot
+        modify vector-search algorithm" error, we never re-send the vector config on an
+        existing index: we fetch it, append ``audience`` if absent, and update in place.
+        Only when the index does not exist do we build the full definition from scratch.
+        No documents are deleted.
+        """
         if not self._enabled:
             return
 
         index_name = self._settings.azure_search_index_name
-        existing = [idx.name for idx in self._index_client.list_indexes()]
-        if index_name in existing:
+
+        # Fast path: index already exists -> only ensure the audience field is present,
+        # preserving Azure's stored vector-search algorithm/profile exactly.
+        try:
+            existing = self._index_client.get_index(index_name)
+        except Exception:
+            existing = None
+
+        if existing is not None:
+            has_audience = any(f.name == "audience" for f in existing.fields)
+            if not has_audience:
+                existing.fields.append(
+                    SimpleField(
+                        name="audience",
+                        type=SearchFieldDataType.String,
+                        filterable=True,
+                        facetable=True,
+                    )
+                )
+                self._index_client.create_or_update_index(existing)
             return
 
+        # No existing index: build the full definition fresh.
         fields = [
             SimpleField(name="chunk_id", type=SearchFieldDataType.String, key=True, filterable=True),
             SearchableField(name="title", type=SearchFieldDataType.String, filterable=True),
             SearchableField(name="source", type=SearchFieldDataType.String, filterable=True),
             SearchableField(name="content", type=SearchFieldDataType.String),
             SimpleField(name="category", type=SearchFieldDataType.String, filterable=True, facetable=True),
+            # RBAC tag (customer/vendor/common) derived from the policy subfolder;
+            # filterable so retrieval can scope results to the caller's role.
+            SimpleField(name="audience", type=SearchFieldDataType.String, filterable=True, facetable=True),
             SearchField(
                 name="content_vector",
                 type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
@@ -131,58 +164,112 @@ class AzureSupportRAGService:
         )
         self._index_client.create_index(index)
 
-    async def index_policy_documents(self, policies_dir: Path) -> int:
-        """Chunk and upload local policy markdown files into Azure AI Search."""
+    async def _purge_all_documents(self) -> int:
+        """Delete every document from the index while keeping its schema intact.
+
+        Chunk IDs are derived from ``{file}:{chunk_index}``, so a re-run with a
+        different chunking strategy leaves orphaned high-index chunks behind. Clearing
+        first guarantees the index reflects only the current policy content.
+        """
+        results = await self._search_client.search(search_text="*", select=["chunk_id"])
+        keys = [doc["chunk_id"] async for doc in results]
+        deleted = 0
+        for i in range(0, len(keys), 1000):
+            batch = [{"chunk_id": k} for k in keys[i : i + 1000]]
+            await self._search_client.delete_documents(documents=batch)
+            deleted += len(batch)
+        return deleted
+
+    async def index_policy_documents(self, policies_dir: Path, limit: int | None = None) -> int:
+        """Chunk and upload local policy markdown files into Azure AI Search.
+
+        When ``limit`` is set, only the first ``limit`` chunks are embedded/uploaded
+        and the destructive purge is skipped. This enables a cheap end-to-end test
+        (embed -> upload -> retrieve) before committing to the full paid run.
+        """
         if not self._enabled:
             return 0
 
-        files = sorted(policies_dir.glob("*.md"))
+        files = sorted(policies_dir.rglob("*.md"))
         if not files:
             return 0
 
+        # Remove stale chunks from previous runs before re-indexing (keeps schema).
+        # Skipped for limited test runs so existing data is never destroyed.
+        if limit is None:
+            await self._purge_all_documents()
+
         docs: list[dict[str, Any]] = []
+        # Imported lazily: ``langchain_text_splitters`` eagerly pulls in optional
+        # heavy deps (e.g. spacy) at package import, so we defer it to the one
+        # method that needs it to keep module import light and resilient.
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        # Pack content into ~1000-char chunks instead of splitting on every blank
+        # line. The scraped vendor pages contain thousands of tiny sections; naive
+        # blank-line splitting produced ~9.5k noisy chunks. Recursive splitting keeps
+        # related text together and collapses the count to a few hundred clean chunks.
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=150,
+            separators=["\n\n", "\n| ", "\n", ". ", " ", ""],
+        )
         for file_path in files:
+            rel = file_path.relative_to(policies_dir).as_posix()
+            # Audience is the immediate subfolder (customer/vendor/common); files at
+            # the policies root default to "common" so everyone can see them.
+            parent = file_path.parent.name.lower()
+            audience = parent if file_path.parent != policies_dir else "common"
             raw = file_path.read_text(encoding="utf-8")
             title = raw.splitlines()[0].lstrip("# ").strip() if raw.splitlines() else file_path.stem
-            sections = [s.strip() for s in raw.split("\n\n") if s.strip()]
+            sections = [s.strip() for s in splitter.split_text(raw) if s.strip()]
             for idx, section in enumerate(sections):
-                chunk_id = hashlib.sha256(f"{file_path.name}:{idx}".encode()).hexdigest()[:40]
+                chunk_id = hashlib.sha256(f"{rel}:{idx}".encode()).hexdigest()[:40]
                 docs.append(
                     {
                         "chunk_id": chunk_id,
                         "title": title,
-                        "source": file_path.name,
+                        "source": rel,
                         "content": section,
                         "category": "policy",
+                        "audience": audience,
                     }
                 )
 
-        # Embed in small batches
-        batch_size = 16
+        # Embed in batches. A smaller batch plus a short inter-batch pause keeps the
+        # request rate under the AIServices S0 tier limit (retries in the embedding
+        # provider cover any remaining transient 429s).
+        if limit is not None:
+            docs = docs[:limit]
+        batch_size = 32
+        batch_delay = 0.5
         with_vectors: list[dict[str, Any]] = []
         for i in range(0, len(docs), batch_size):
             batch = docs[i : i + batch_size]
-            emb = await self._client.embeddings.create(
-                model=self._settings.azure_openai_embedding_deployment,
-                input=[d["content"] for d in batch],
-            )
-            for d, e in zip(batch, emb.data):
-                d["content_vector"] = e.embedding
+            vectors = await aembed_texts([d["content"] for d in batch], kind="document")
+            for d, vec in zip(batch, vectors):
+                d["content_vector"] = vec
                 with_vectors.append(d)
+            if i + batch_size < len(docs):
+                await asyncio.sleep(batch_delay)
 
-        result = await self._search_client.merge_or_upload_documents(documents=with_vectors)
-        return sum(1 for r in result if r.succeeded)
+        # Upload in small batches so a single request never exceeds the Azure Search
+        # request-size limit. Uploading everything at once triggers a 413 and the
+        # SDK's buggy auto-split recovery path (KeyError: 'error_map' in 11.6.0b9).
+        upload_batch_size = 50
+        succeeded = 0
+        for i in range(0, len(with_vectors), upload_batch_size):
+            batch = with_vectors[i : i + upload_batch_size]
+            result = await self._search_client.merge_or_upload_documents(documents=batch)
+            succeeded += sum(1 for r in result if r.succeeded)
+        return succeeded
 
     async def retrieve(self, query: str, top_k: int | None = None) -> list[dict[str, Any]]:
         """Retrieve top policy chunks via hybrid+vector search."""
         if not self._enabled:
             return []
 
-        query_embedding = await self._client.embeddings.create(
-            model=self._settings.azure_openai_embedding_deployment,
-            input=query,
-        )
-        vector = query_embedding.data[0].embedding
+        vector = (await aembed_texts([query], kind="query"))[0]
 
         k = top_k or self._settings.rag_top_k
         results = await self._search_client.search(
@@ -243,15 +330,32 @@ class AzureSupportRAGService:
         )
         user = f"Policy context:\n" + "\n\n".join(context_parts) + f"\n\nQuestion: {query}"
 
-        completion = await self._client.chat.completions.create(
-            model=self._settings.azure_openai_chat_deployment,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.2,
-            max_tokens=280,
-        )
+        llm_started = time.perf_counter()
+        llm_error = False
+        completion = None
+        try:
+            completion = await self._client.chat.completions.create(
+                model=self._settings.azure_openai_chat_deployment,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=0.2,
+                max_tokens=280,
+            )
+        except Exception:
+            llm_error = True
+            raise
+        finally:
+            usage = getattr(completion, "usage", None) if completion is not None else None
+            usage_metrics.record(
+                "azure_openai_chat",
+                latency_ms=round((time.perf_counter() - llm_started) * 1000, 1),
+                prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+                completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+                total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
+                error=llm_error,
+            )
         answer = completion.choices[0].message.content or "I do not have enough policy context to answer that question."
         return answer, citations, top_score
 

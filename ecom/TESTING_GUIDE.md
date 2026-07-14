@@ -42,6 +42,111 @@ curl http://localhost:8000/health
 }
 ```
 
+## RBAC for RAG — Role-scoped policy retrieval
+
+The RAG assistant filters indexed policy documents by the **role of the logged-in
+user**. This is enforced at retrieval time with an OData `audience` filter on the
+Azure AI Search index, so a caller only ever receives chunks for their allowed
+audiences.
+
+### Two backends — use the right one
+
+| Service | Container | Host port | Purpose |
+| --- | --- | --- | --- |
+| Storefront (auth/roles) | `shopease-api` | **`:5002`** | Issues JWTs that carry the user's `role` claim |
+| RAG service | `shopease-rag-api` | **`:8000`** | Verifies the storefront token and serves role-scoped chat |
+
+> **Important:** Log in on **`:5002`** (the storefront), then send that token to
+> **`:8000`** `/chat/query`. The storefront signs tokens with the same secret the
+> RAG service verifies (`SHOPEASE_JWT_SECRET`). Logging in directly on `:8000`
+> produces a token **without** a usable `role` claim and defaults the caller to
+> `customer`.
+
+### Test accounts (storefront `:5002`)
+
+| Role | Email | Password | Sees audiences |
+| --- | --- | --- | --- |
+| ADMIN | `admin@shopease.com` | `Admin1234` | customer + vendor + common (everything) |
+| VENDOR | `vendor@shopease.com` | `Vendor1234` | vendor + common |
+| CUSTOMER | `customer@shopease.com` | `Customer1234` | customer + common |
+
+The `admin` account is **auto-seeded** on storefront startup (from `ADMIN_EMAIL` /
+`ADMIN_PASSWORD`). Create the vendor/customer accounts once via register:
+
+```bash
+curl -X POST http://localhost:5002/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Vendor User","email":"vendor@shopease.com","password":"Vendor1234","role":"VENDOR"}'
+
+curl -X POST http://localhost:5002/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Customer User","email":"customer@shopease.com","password":"Customer1234","role":"CUSTOMER"}'
+```
+
+### End-to-end RBAC test
+
+```bash
+# 1) Log in on the storefront (:5002) and grab the access token
+TOKEN=$(curl -s -X POST http://localhost:5002/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"vendor@shopease.com","password":"Vendor1234"}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['data']['accessToken'])")
+
+# 2) Send the token to the RAG chat endpoint (:8000)
+curl -X POST http://localhost:8000/chat/query \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"query":"What is the vendor payout schedule and commission rate?"}'
+```
+
+PowerShell equivalent:
+
+```powershell
+$login = Invoke-RestMethod -Uri http://localhost:5002/api/v1/auth/login -Method Post `
+  -ContentType 'application/json' -Body (@{email='vendor@shopease.com';password='Vendor1234'}|ConvertTo-Json)
+$token = $login.data.accessToken
+Invoke-RestMethod -Uri http://localhost:8000/chat/query -Method Post `
+  -ContentType 'application/json' -Headers @{Authorization="Bearer $token"} `
+  -Body (@{query='What is the vendor payout schedule and commission rate?'}|ConvertTo-Json)
+```
+
+### Expected behavior (verified)
+
+| Asks vendor-only policy as… | Result |
+| --- | --- |
+| **VENDOR** | Answered; citations come from `vendor/*` docs |
+| **CUSTOMER** | Denied — "not enough information"; only `customer`/`common` docs in scope |
+| **ADMIN** | Answered; can see all audiences |
+
+> **Note on search tier:** If the Azure AI Search service does not have semantic
+> ranking enabled (Free/Basic tiers), the retriever automatically falls back to
+> plain hybrid (vector + keyword) search. The `audience` RBAC filter is applied in
+> both modes, so the fallback never widens access.
+
+### Automated QA validation set
+
+A grounded QA set exercises retrieval + RBAC end-to-end against the live stack:
+
+- Dataset: [tests/rag_qa_validation.json](tests/rag_qa_validation.json) — questions
+  tagged with the owning `audience`, the expected source doc, and which roles may
+  vs. must-not retrieve it.
+- Runner: [scripts/run_rag_qa.py](scripts/run_rag_qa.py) — logs each role into the
+  storefront, queries the RAG service, and validates the returned **citations**
+  (not the LLM prose, which varies run-to-run):
+  - `roles_allowed` must retrieve at least one doc from their own audience;
+  - `roles_denied` must retrieve **zero** docs from the case's audience (no leak).
+
+```bash
+# from the ecom/ directory, against the running compose stack
+python scripts/run_rag_qa.py            # baseline cases (exit non-zero on failure)
+python scripts/run_rag_qa.py --stretch  # also run known retrieval/routing gap cases (non-fatal)
+```
+
+`stretch_cases` documents real gaps surfaced during validation: specific figures
+(e.g. the refund "13 days" timeline, the "$1,000,000" insurance limit) live in
+lower-ranked chunks that miss at `rag_top_k=3`, and product-y phrasings (e.g.
+"offer Selling Services") are misrouted by the semantic router to product search.
+
 ## Step 2: Start Frontend (React Dev Server)
 
 In a **new terminal**:

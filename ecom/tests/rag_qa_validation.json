@@ -1,0 +1,150 @@
+{
+  "description": "RAG QA validation set for the ShopEase policy assistant. Each case is grounded in an indexed policy document and tagged with the audience that owns it, so the same questions validate BOTH retrieval quality and RBAC access control. 'roles_allowed' must receive a grounded answer that contains 'expect_keywords' and is NOT a refusal; 'roles_denied' must be refused (answer contains one of 'deny_phrases'). 'cases' is the reliable baseline (all green at rag_top_k>=3). 'stretch_cases' documents real retrieval/routing gaps surfaced during validation and is reported but non-fatal.",
+  "roles": {
+    "admin": "admin@shopease.com",
+    "vendor": "vendor@shopease.com",
+    "customer": "customer@shopease.com"
+  },
+  "deny_phrases": [
+    "do not have enough information",
+    "don't have enough information",
+    "not enough information",
+    "could not find matching products",
+    "contact support",
+    "i do not have"
+  ],
+  "cases": [
+    {
+      "id": "cust-refund-method",
+      "audience": "customer",
+      "question": "Which payment method is a refund issued to for a prepaid order?",
+      "expect_keywords": ["original payment method"],
+      "expect_source": "202111770.md",
+      "roles_allowed": ["customer", "admin"],
+      "roles_denied": [],
+      "source_hint": "customer/202111770.md"
+    },
+    {
+      "id": "cust-returns-policy",
+      "audience": "customer",
+      "question": "What is the returns and replacement policy for items I bought?",
+      "expect_keywords": ["return", "replacement"],
+      "expect_source": "202111910.md",
+      "roles_allowed": ["customer", "admin"],
+      "roles_denied": [],
+      "source_hint": "customer/202111910.md, customer/202111750.md"
+    },
+    {
+      "id": "cust-cancel-order",
+      "audience": "customer",
+      "question": "How do I cancel an item or an order?",
+      "expect_keywords": ["cancel"],
+      "expect_source": "gsl37wqtjzuya9qe.md",
+      "roles_allowed": ["customer", "admin"],
+      "roles_denied": [],
+      "source_hint": "customer/gsl37wqtjzuya9qe.md (Cancel Items and Orders)"
+    },
+    {
+      "id": "cust-shipping-info",
+      "audience": "customer",
+      "question": "Where can I find general shipping and delivery information for my order?",
+      "expect_keywords": ["shipping", "delivery"],
+      "expect_source": "g77vxwb69x2d9m6j.md",
+      "roles_allowed": ["customer", "admin"],
+      "roles_denied": [],
+      "source_hint": "customer/g77vxwb69x2d9m6j.md, customer/gge5x8ev7vnvtk6r.md"
+    },
+    {
+      "id": "vendor-background-check",
+      "audience": "vendor",
+      "question": "Are background checks required for personnel performing services at a customer's home?",
+      "expect_keywords": ["background check"],
+      "expect_source": "g201484410.md",
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g201484410.md"
+    },
+    {
+      "id": "vendor-fee-schedule",
+      "audience": "vendor",
+      "question": "What fees apply when selling on Amazon, including referral and refund administration fees?",
+      "expect_keywords": ["fee"],
+      "expect_source": "g200336920.md",
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g200336920.md (Selling on Amazon fee schedule)"
+    },
+    {
+      "id": "vendor-account-health",
+      "audience": "vendor",
+      "question": "What is the Account Health Rating program policy for sellers?",
+      "expect_keywords": ["account health"],
+      "expect_source": "g200205250.md",
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g200205250.md"
+    },
+    {
+      "id": "vendor-fba-reimbursement",
+      "audience": "vendor",
+      "question": "How does the FBA inventory reimbursement policy work?",
+      "expect_keywords": ["reimbursement", "inventory"],
+      "expect_source": "g200213130.md",
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g200213130.md"
+    },
+    {
+      "id": "vendor-restricted-products",
+      "audience": "vendor",
+      "question": "Which seller policy describes items that are prohibited or not allowed to be listed for sale?",
+      "expect_keywords": ["restricted"],
+      "expect_source": "g200164330.md",
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g200164330.md (Restricted products)"
+    },
+    {
+      "id": "vendor-tax-identity",
+      "audience": "vendor",
+      "question": "What are the US income reporting and tax identity collection requirements for sellers?",
+      "expect_keywords": ["tax"],
+      "expect_source": "g200663290.md",
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g200663290.md"
+    }
+  ],
+  "stretch_cases": [
+    {
+      "id": "cust-refund-timeline",
+      "audience": "customer",
+      "question": "How long does it take to process a refund after my return is picked up?",
+      "expect_keywords": ["13 days"],
+      "roles_allowed": ["customer", "admin"],
+      "roles_denied": [],
+      "source_hint": "customer/202111770.md",
+      "note": "The specific '13 days' figure lives in a lower-ranked chunk; misses at rag_top_k=3. Raising rag_top_k improves recall."
+    },
+    {
+      "id": "vendor-insurance-liability",
+      "audience": "vendor",
+      "question": "What commercial general liability insurance limit must a seller maintain to offer services?",
+      "expect_keywords": ["1,000,000"],
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g201484410.md (Selling Services Terms)",
+      "note": "The $1,000,000 insurance figure is in a lower-ranked chunk; misses at rag_top_k=3."
+    },
+    {
+      "id": "vendor-services-eligibility",
+      "audience": "vendor",
+      "question": "How does a seller become eligible to offer Selling Services on Amazon?",
+      "expect_keywords": ["invitation"],
+      "roles_allowed": ["vendor", "admin"],
+      "roles_denied": ["customer"],
+      "source_hint": "vendor/g201484410.md",
+      "note": "Phrasing with 'offer'/'Selling Services' is misrouted by the semantic router to product-catalog search instead of policy RAG."
+    }
+  ]
+}

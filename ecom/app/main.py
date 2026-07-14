@@ -14,20 +14,65 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from app.config import settings
 from app.db import DatabaseManager
+from app.logging_utils import JsonLogFormatter, RequestIdFilter
 from app.middleware.body_size_limit import BodySizeLimitMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.telemetry import TelemetryMiddleware
-from app.routers import auth, products, orders, payments, carts, seed, chat, rag_admin
+from app.routers import auth, products, orders, payments, carts, seed, chat, rag_admin, metrics
 from app.schemas import HealthCheckResponse, ErrorResponse
 from app.startup_checks import validate_startup_settings
 
-# Configure logging
+# Configure logging. When log_format="json", every record is emitted as a single
+# JSON line including the request correlation id; otherwise a plain text format is
+# used. The RequestIdFilter injects the current request id onto every record.
+_log_handler = logging.StreamHandler(sys.stdout)
+_log_handler.addFilter(RequestIdFilter())
+if settings.log_format.lower() == "json":
+    _log_handler.setFormatter(JsonLogFormatter())
+else:
+    _log_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] - %(message)s"
+        )
+    )
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[_log_handler],
+    force=True,
 )
 logger = logging.getLogger(__name__)
+
+
+def _configure_app_insights() -> None:
+    """Wire Azure Monitor / Application Insights when enabled and configured.
+
+    Auto-instruments FastAPI (traces), logging, and metrics and exports them to
+    Application Insights via the connection string. Guarded so the app runs fine
+    when the ``azure-monitor-opentelemetry`` package is absent or App Insights is
+    disabled/unconfigured.
+    """
+    if not settings.app_insights_enabled or not settings.app_insights_connection_string:
+        return
+    try:
+        from azure.monitor.opentelemetry import configure_azure_monitor
+    except ImportError:
+        logger.warning(
+            "app_insights_enabled but azure-monitor-opentelemetry is not installed; "
+            "skipping Application Insights wiring."
+        )
+        return
+    try:
+        configure_azure_monitor(
+            connection_string=settings.app_insights_connection_string,
+            logger_name="app",
+        )
+        logger.info("Application Insights / Azure Monitor configured.")
+    except Exception as exc:  # noqa: BLE001 - never block startup on telemetry setup
+        logger.warning("Failed to configure Application Insights: %r", exc)
+
+
+_configure_app_insights()
 
 
 async def _stripe_status() -> str:
@@ -270,7 +315,7 @@ app.include_router(payments.router)
 app.include_router(seed.router)
 app.include_router(chat.router)
 app.include_router(rag_admin.router)
-
+app.include_router(metrics.router)
 
 # ============ Root Endpoint ============
 

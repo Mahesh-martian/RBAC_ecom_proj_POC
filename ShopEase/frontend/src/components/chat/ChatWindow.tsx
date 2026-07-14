@@ -12,13 +12,14 @@ import {
   appendToMessage,
   ChatMessage,
   ChatRecommendation,
+  clearConversations,
   setRecommendations,
 } from "@/redux/slices/chatSlice";
 import { streamChat } from "@/redux/api/streamChat";
 import { RootState } from "@/redux/store";
 import { useState } from "react";
 import Link from "next/link";
-import { MessageCircle, Send } from "lucide-react";
+import { MessageCircle, Send, Trash2 } from "lucide-react";
 
 const ChatWindow = () => {
   const dispatch = useDispatch();
@@ -151,6 +152,21 @@ const ChatWindow = () => {
           <MessageCircle className="w-6 h-6" />
         </PopoverTrigger>
         <PopoverContent className="w-80 p-4 shadow-lg rounded-lg bg-card text-card-foreground">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-semibold text-foreground">
+              Shopping Assistant
+            </span>
+            <button
+              type="button"
+              onClick={() => dispatch(clearConversations())}
+              disabled={isLoading || conversations.length === 0}
+              title="Clear chat"
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Clear
+            </button>
+          </div>
           <ScrollArea className="h-64 w-full border border-border rounded-md p-2">
             {conversations.map((msg) => (
               <div

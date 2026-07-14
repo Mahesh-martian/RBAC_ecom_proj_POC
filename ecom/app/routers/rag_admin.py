@@ -19,8 +19,13 @@ external_rag = ExternalRAGClient(settings)
 async def index_policies(
     request: Request,
     x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+    limit: int | None = None,
 ) -> dict:
-    """Create/ensure Azure Search index and upload local policy docs."""
+    """Create/ensure Azure Search index and upload local policy docs.
+
+    Pass ``?limit=N`` to embed only the first N chunks (skips the destructive
+    purge) as a cheap end-to-end test before running the full paid indexing.
+    """
     if not settings.rag_admin_api_key:
         raise HTTPException(
             status_code=503,
@@ -35,7 +40,7 @@ async def index_policies(
 
     if settings.azure_rag_configured and azure_rag.enabled:
         azure_rag.ensure_index()
-        indexed = await azure_rag.index_policy_documents(policies_dir)
+        indexed = await azure_rag.index_policy_documents(policies_dir, limit=limit)
         backend = "azure"
         message = "Policies indexed into Azure Search"
     elif external_rag.enabled:
