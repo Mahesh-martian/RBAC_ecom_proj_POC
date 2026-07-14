@@ -5,9 +5,9 @@
 # Services:
 #   postgres      - shared DB (databases: shopease, ecommerce)
 #   redis         - cache / rate-limit / future SSE pub-sub
-#   shopease-api  - FastAPI e-commerce backend   (host :5002)
-#   rag-api       - FastAPI RAG service (ecom)     (host :8000)
-#   frontend      - Next.js storefront             (host :3000)
+#   shopease-api  - FastAPI e-commerce backend   (host :5002)   [services/storefront]
+#   rag-api       - FastAPI RAG service          (host :8000)   [services/rag]
+#   frontend      - Next.js storefront           (host :3000)   [apps/frontend]
 #
 # The browser calls shopease-api at localhost:5002 (published port); inter-service
 # calls (rag-api -> shopease-api) use the compose network DNS name.
@@ -49,7 +49,7 @@ services:
 
   shopease-api:
     build:
-      context: ./shopease_backend
+      context: ./services/storefront
       dockerfile: Dockerfile
     container_name: shopease-api
     environment:
@@ -80,13 +80,13 @@ services:
 
   rag-api:
     build:
-      context: ./ecom
+      context: ./services/rag
       dockerfile: Dockerfile
     container_name: shopease-rag-api
-    # Azure RAG credentials (Azure OpenAI + AI Search) are loaded from ecom/.env
+    # Azure RAG credentials (Azure OpenAI + AI Search) are loaded from services/rag/.env
     # which is gitignored. environment: values below override any .env duplicates.
     env_file:
-      - ./ecom/.env
+      - ./services/rag/.env
     environment:
       ENVIRONMENT: development
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ecommerce
@@ -123,12 +123,12 @@ services:
   # request path. Shares the ecom image; runs worker.py instead of the API.
   worker:
     build:
-      context: ./ecom
+      context: ./services/rag
       dockerfile: Dockerfile
     container_name: shopease-worker
     command: ["python", "-m", "worker"]
     env_file:
-      - ./ecom/.env
+      - ./services/rag/.env
     environment:
       ENVIRONMENT: development
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/ecommerce
@@ -148,7 +148,7 @@ services:
 
   frontend:
     build:
-      context: ./ShopEase/frontend
+      context: ./apps/frontend
       dockerfile: Dockerfile
     container_name: shopease-frontend
     environment:

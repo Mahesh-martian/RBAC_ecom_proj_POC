@@ -21,7 +21,7 @@ RAGAppenv/
 *.env
 !*.env.example
 # Contains real Azure credentials locally — keep out of git.
-ecom/.env.example
+services/rag/.env.example
 
 # ===== Node / frontend =====
 node_modules/

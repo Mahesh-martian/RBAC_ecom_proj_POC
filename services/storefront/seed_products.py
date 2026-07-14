@@ -6,7 +6,7 @@ return real recommendations). Idempotent: re-running it is a no-op once seeded.
 
 Run from the host against the compose Postgres (published on :5432)::
 
-    cd shopease_backend
+    cd services/storefront
     $env:DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/shopease"
     python seed_products.py
 """
