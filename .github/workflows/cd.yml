@@ -1,0 +1,66 @@
+name: CD (build + deploy to Azure Container Apps)
+
+# Builds each microservice image in ACR and rolls out a new Container App
+# revision. Requires the infra (Phase 5 Bicep) to be provisioned first.
+#
+# Required repository secrets:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID  (OIDC federated credential)
+# Required repository variables:
+#   ACR_NAME            e.g. shopeaseacr
+#   RESOURCE_GROUP      e.g. shopease-prod-rg
+#   ACA_SHOPEASE_API    container app name for shopease-api
+#   ACA_RAG_API         container app name for rag-api
+#   ACA_FRONTEND        container app name for frontend
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: shopease-api
+            context: services/storefront
+            app_var: ACA_SHOPEASE_API
+          - service: rag-api
+            context: services/rag
+            app_var: ACA_RAG_API
+          - service: frontend
+            context: apps/frontend
+            app_var: ACA_FRONTEND
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build & push image in ACR
+        run: |
+          az acr build \
+            --registry "${{ vars.ACR_NAME }}" \
+            --image "${{ matrix.service }}:${{ env.IMAGE_TAG }}" \
+            --image "${{ matrix.service }}:latest" \
+            --file "${{ matrix.context }}/Dockerfile" \
+            "${{ matrix.context }}"
+
+      - name: Deploy new Container App revision
+        run: |
+          az containerapp update \
+            --name "${{ vars[matrix.app_var] }}" \
+            --resource-group "${{ vars.RESOURCE_GROUP }}" \
+            --image "${{ vars.ACR_NAME }}.azurecr.io/${{ matrix.service }}:${{ env.IMAGE_TAG }}"
