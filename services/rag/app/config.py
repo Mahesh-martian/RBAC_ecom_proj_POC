@@ -140,8 +140,11 @@ class Settings(BaseSettings):
     ragas_min_context_precision: float = Field(default=0.6)
     ragas_min_context_recall: float = Field(default=0.6)
     # Online sampling — fraction of prod /chat/query requests to score in-band.
-    ragas_online_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
-    
+    ragas_online_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)    # Which metrics to compute online. Only metrics that do not require a
+    # ground-truth reference are allowed: faithfulness, answer_relevancy.
+    ragas_online_metrics: str = Field(default="faithfulness")
+    # Maximum number of scoring tasks that may run concurrently.
+    ragas_online_max_concurrent: int = Field(default=2, ge=1, le=16)    
     # Redis / event bus (async worker transport; maps to Azure Service Bus in prod)
     redis_url: Optional[str] = Field(default=None)
     events_consumer_group: str = Field(default="ecom-workers")

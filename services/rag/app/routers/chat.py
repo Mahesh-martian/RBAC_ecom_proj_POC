@@ -29,6 +29,7 @@ from app.services.prompt_registry import (
     collect_prompt_labels,
     get_prompt_registry,
 )
+from app.services.ragas_online import schedule_online_score
 from app.services.semantic_router import SemanticRouter
 from app.services.support_rag import SupportRAGService
 from app.services import shopease_products
@@ -48,6 +49,17 @@ ROLE_AUDIENCES: dict[str, set[str]] = {
     "vendor": {"vendor", "common"},
     "admin": {"customer", "vendor", "common"},
 }
+
+
+def case_audience_label(audiences: set[str] | None) -> str | None:
+    """Return a stable, human-readable label for an audience set.
+
+    Used only for telemetry / online RAGAS log lines. Sorted-joined so log
+    consumers can group by it without worrying about set ordering.
+    """
+    if not audiences:
+        return None
+    return ",".join(sorted(audiences))
 
 
 def _get_role_persona(role: str) -> tuple[Optional[str], Optional[object]]:
@@ -358,6 +370,26 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
             prompt_versions.update(collect_prompt_labels([persona_template]))
         if getattr(langchain_result, "system_prompt_label", None):
             prompt_versions["support_system"] = langchain_result.system_prompt_label
+
+        # Fire-and-forget online RAGAS sampling. No-op unless
+        # RAGAS_ONLINE_SAMPLE_RATE > 0 and RAGAS_ENABLED=true. Runs on a
+        # background task so it never delays the client response.
+        request_id_header = request_context.headers.get("X-Request-Id") or ""
+        contexts_for_scoring = [
+            str(ctx.get("content") or "")
+            for ctx in getattr(langchain_result, "contexts", [])
+        ]
+        schedule_online_score(
+            request_id=request_id_header,
+            query=query_text,
+            answer=answer,
+            contexts=contexts_for_scoring,
+            role=role,
+            audience=case_audience_label(audiences),
+            system_prompt_label=getattr(langchain_result, "system_prompt_label", ""),
+            prompt_versions=prompt_versions,
+        )
+
         return ChatQueryResponse(
             answer=answer,
             recommendations=[],
