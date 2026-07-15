@@ -1,0 +1,9 @@
+id: role_help_text
+variant: customer
+version: "1"
+description: Guidance text shown for greetings/ambiguous queries to customers.
+variables: []
+template: |
+  I can help you find products or answer questions about orders,
+  returns, shipping, and your account. Try 'running shoes under 100'
+  or 'what is your return policy?'.

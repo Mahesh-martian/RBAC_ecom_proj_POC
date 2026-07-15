@@ -23,3 +23,10 @@ langchain-core==1.2.18
 langchain-text-splitters==1.1.1
 numpy==2.2.1
 redis==5.2.1
+# Prompt versioning: local YAML files (PyYAML) with optional Langfuse-hosted registry.
+PyYAML==6.0.2
+langfuse==2.60.9
+# RAGAS evaluation (offline CLI + optional online sampling). Uses datasets for
+# in-memory eval sets and pins pandas to a stable range known to work with ragas.
+ragas==0.2.10
+datasets==3.2.0

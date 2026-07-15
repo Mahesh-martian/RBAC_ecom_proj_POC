@@ -1,0 +1,9 @@
+id: role_help_text
+variant: admin
+version: "1"
+description: Guidance text shown for greetings/ambiguous queries to admins.
+variables: []
+template: |
+  I can help with customer and seller policies and look up products.
+  Try 'what is the return policy?', 'how do seller payouts work?', or
+  'show me running shoes'.

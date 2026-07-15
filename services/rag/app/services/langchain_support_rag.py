@@ -12,6 +12,7 @@ from openai import AzureOpenAI, BadRequestError
 
 from app.config import settings
 from app.logging_utils import log_step
+from app.services.prompt_registry import PromptNotFoundError, get_prompt_registry
 from app.services.usage_metrics import usage_metrics
 
 try:
@@ -40,6 +41,10 @@ class LangChainSupportResult:
     retrieval_count: int = 0
     search_latency_ms: float = 0.0
     llm_latency_ms: float = 0.0
+    # Version of the system prompt used to build this answer, e.g.
+    # ``support_system@v2``. Empty string when the registry lookup fell back to
+    # the hard-coded default.
+    system_prompt_label: str = ""
 
 
 def _is_semantic_unsupported(exc: "HttpResponseError") -> bool:
@@ -293,11 +298,24 @@ class LangChainSupportRAGService:
             top_score=round(top_score, 4),
         )
 
-        system_prompt = (
-            "You are a customer support assistant. Answer only from provided policy context. "
-            "If insufficient context exists, say you do not have enough information. "
-            "Keep answers concise and actionable."
-        )
+        system_prompt_label = ""
+        try:
+            support_prompt = get_prompt_registry().get("support_system")
+            system_prompt = support_prompt.template.strip() or (
+                "You are a customer support assistant. Answer only from provided policy context. "
+                "If insufficient context exists, say you do not have enough information. "
+                "Keep answers concise and actionable."
+            )
+            system_prompt_label = support_prompt.label
+        except PromptNotFoundError as exc:
+            logger.warning(
+                "prompt_registry support_system miss: %s; using hard-coded fallback", exc
+            )
+            system_prompt = (
+                "You are a customer support assistant. Answer only from provided policy context. "
+                "If insufficient context exists, say you do not have enough information. "
+                "Keep answers concise and actionable."
+            )
         if persona:
             system_prompt = persona + " " + system_prompt
         if user_name:
@@ -419,4 +437,5 @@ class LangChainSupportRAGService:
             retrieval_count=len(rows),
             search_latency_ms=search_latency_ms,
             llm_latency_ms=llm_latency_ms,
+            system_prompt_label=system_prompt_label,
         )

@@ -24,6 +24,11 @@ from app.schemas import (
 )
 from app.config import settings
 from app.services.langchain_support_rag import LangChainSupportRAGService
+from app.services.prompt_registry import (
+    PromptNotFoundError,
+    collect_prompt_labels,
+    get_prompt_registry,
+)
 from app.services.semantic_router import SemanticRouter
 from app.services.support_rag import SupportRAGService
 from app.services import shopease_products
@@ -44,21 +49,41 @@ ROLE_AUDIENCES: dict[str, set[str]] = {
     "admin": {"customer", "vendor", "common"},
 }
 
-# Role-specific persona prepended to the support system prompt so the assistant
-# frames answers for the right audience.
-ROLE_PERSONA: dict[str, str] = {
-    "customer": (
-        "You are ShopEase's shopping and customer-support assistant helping a shopper."
-    ),
-    "vendor": (
-        "You are ShopEase's seller-support assistant helping a marketplace vendor with "
-        "seller policies, product listings, fees, payouts, shipping, returns, and account health."
-    ),
-    "admin": (
-        "You are ShopEase's administrator assistant with full access to both customer "
-        "and seller policies."
-    ),
-}
+
+def _get_role_persona(role: str) -> tuple[Optional[str], Optional[object]]:
+    """Fetch the persona prompt for a role from the prompt registry.
+
+    Returns ``(text, template)`` where ``template`` is the ``PromptTemplate``
+    object (or ``None`` on lookup miss) so callers can record the version used.
+    Missing prompts are logged and treated as "no persona" — the RAG service
+    then falls back to its default system prompt only.
+    """
+    try:
+        tpl = get_prompt_registry().get("role_persona", variant=role)
+    except PromptNotFoundError as exc:
+        logger.warning("prompt_registry role_persona miss for role=%s: %s", role, exc)
+        return None, None
+    return tpl.template.strip() or None, tpl
+
+
+def _get_role_help_text(role: str) -> tuple[str, Optional[object]]:
+    """Fetch the help/greeting text for a role from the prompt registry.
+
+    Falls back to a hard-coded customer-oriented string if the registry lookup
+    fails, so a broken deploy still gives shoppers a usable message.
+    """
+    fallback = (
+        "I can help you find products or answer questions about orders, "
+        "returns, shipping, and your account. Try 'running shoes under 100' "
+        "or 'what is your return policy?'."
+    )
+    try:
+        tpl = get_prompt_registry().get("role_help_text", variant=role)
+    except PromptNotFoundError as exc:
+        logger.warning("prompt_registry role_help_text miss for role=%s: %s", role, exc)
+        return fallback, None
+    text = tpl.template.strip() or fallback
+    return text, tpl
 
 
 def _normalize_role(role: Optional[str]) -> str:
@@ -107,24 +132,9 @@ def _resolve_role_and_name(request_context: Request, request: ChatQueryRequest) 
 
 
 def _role_help_text(role: str) -> str:
-    """Guidance text shown for greetings/ambiguous queries, tailored per role."""
-    if role == "vendor":
-        return (
-            "I can help with seller topics like listings, fees, payouts, shipping, "
-            "returns, and account health \u2014 and you can still look up products. "
-            "Try 'how are payouts calculated?' or 'show me backpacks'."
-        )
-    if role == "admin":
-        return (
-            "I can help with customer and seller policies and look up products. "
-            "Try 'what is the return policy?', 'how do seller payouts work?', or "
-            "'show me running shoes'."
-        )
-    return (
-        "I can help you find products or answer questions about orders, "
-        "returns, shipping, and your account. Try 'running shoes under 100' "
-        "or 'what is your return policy?'."
-    )
+    """Backwards-compatible wrapper; source of truth is the prompt registry."""
+    text, _ = _get_role_help_text(role)
+    return text
 
 
 
@@ -228,7 +238,8 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
     # is configured) and personalize replies with their name.
     role, resolved_name = _resolve_role_and_name(request_context, request)
     audiences = ROLE_AUDIENCES.get(role, {"customer", "common"})
-    persona = ROLE_PERSONA.get(role)
+    persona, persona_template = _get_role_persona(role)
+    help_text, help_template = _get_role_help_text(role)
     first_name = (resolved_name or "").strip().split(" ")[0] if resolved_name else ""
     greeting_prefix = f"Hi {first_name}! " if first_name else "Hi! "
 
@@ -236,13 +247,18 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
     greeting_terms = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening"}
     if normalized_query.strip() in greeting_terms:
         return ChatQueryResponse(
-            answer=greeting_prefix + _role_help_text(role),
+            answer=greeting_prefix + help_text,
             recommendations=[],
             citations=[],
             conversation_id=request.conversation_id,
             response_type="general",
             provider="local",
             confidence=1.0,
+            usage=ChatUsage(
+                prompt_versions=collect_prompt_labels(
+                    [t for t in (help_template,) if t is not None]
+                )
+            ),
         )
 
     # Basic category understanding from natural-language terms.
@@ -335,6 +351,13 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
             langchain_result.search_latency_ms,
             langchain_result.llm_latency_ms,
         )
+        # Assemble prompt-version audit trail: the persona wrapper + the
+        # system-prompt version chosen by the RAG service (surfaced on the result).
+        prompt_versions: dict[str, str] = {}
+        if persona_template is not None:
+            prompt_versions.update(collect_prompt_labels([persona_template]))
+        if getattr(langchain_result, "system_prompt_label", None):
+            prompt_versions["support_system"] = langchain_result.system_prompt_label
         return ChatQueryResponse(
             answer=answer,
             recommendations=[],
@@ -350,6 +373,7 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
                 retrieval_count=langchain_result.retrieval_count,
                 search_latency_ms=langchain_result.search_latency_ms,
                 llm_latency_ms=langchain_result.llm_latency_ms,
+                prompt_versions=prompt_versions,
             ),
         )
 
@@ -362,13 +386,18 @@ async def chat_query(request_context: Request, request: ChatQueryRequest, sessio
     )
     if (intent == "greeting" or is_ambiguous) and not forced_product:
         return ChatQueryResponse(
-            answer=greeting_prefix + _role_help_text(role),
+            answer=greeting_prefix + help_text,
             recommendations=[],
             citations=[],
             conversation_id=request.conversation_id,
             response_type="general",
             provider="local",
             confidence=1.0,
+            usage=ChatUsage(
+                prompt_versions=collect_prompt_labels(
+                    [t for t in (help_template,) if t is not None]
+                )
+            ),
         )
 
     base_stmt = (

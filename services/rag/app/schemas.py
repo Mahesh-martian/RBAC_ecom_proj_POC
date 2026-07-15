@@ -349,6 +349,10 @@ class ChatUsage(BaseModel):
     retrieval_count: int = 0
     search_latency_ms: float = 0.0
     llm_latency_ms: float = 0.0
+    # Prompt versions used to build the answer, keyed by prompt id (or id:variant).
+    # Populated by the prompt registry so responses are auditable and A/B tests
+    # can be attributed to specific prompt revisions.
+    prompt_versions: Dict[str, str] = Field(default_factory=dict)
 
 
 class ChatQueryResponse(BaseModel):

@@ -109,6 +109,38 @@ class Settings(BaseSettings):
 
     # Admin security for operational endpoints
     rag_admin_api_key: Optional[str] = Field(default=None)
+
+    # Prompt versioning / registry
+    prompt_registry_provider: str = Field(
+        default="yaml",
+        description="yaml | langfuse | composite (langfuse first, YAML fallback)",
+    )
+    prompt_cache_ttl_seconds: int = Field(default=300)
+
+    # Langfuse (external prompt registry + LLM tracing)
+    langfuse_public_key: Optional[str] = Field(default=None)
+    langfuse_secret_key: Optional[str] = Field(default=None)
+    langfuse_host: Optional[str] = Field(
+        default=None,
+        description="e.g. https://cloud.langfuse.com or a self-hosted URL",
+    )
+
+    # RAGAS evaluation
+    ragas_enabled: bool = Field(default=False)
+    # Metrics computed offline / on demand: comma-separated subset of
+    # faithfulness, answer_relevancy, context_precision, context_recall, answer_similarity
+    ragas_metrics: str = Field(
+        default="faithfulness,answer_relevancy,context_precision,context_recall,answer_similarity",
+    )
+    # Judge model (defaults to azure_openai_chat_deployment when unset).
+    ragas_judge_deployment: Optional[str] = Field(default=None)
+    # Threshold below which a metric is treated as a failure in CI.
+    ragas_min_faithfulness: float = Field(default=0.7)
+    ragas_min_answer_relevancy: float = Field(default=0.7)
+    ragas_min_context_precision: float = Field(default=0.6)
+    ragas_min_context_recall: float = Field(default=0.6)
+    # Online sampling — fraction of prod /chat/query requests to score in-band.
+    ragas_online_sample_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     
     # Redis / event bus (async worker transport; maps to Azure Service Bus in prod)
     redis_url: Optional[str] = Field(default=None)

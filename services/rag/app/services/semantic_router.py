@@ -17,11 +17,15 @@ from openai import AzureOpenAI
 
 from app.config import settings
 from app.logging_utils import log_step
+from app.services.prompt_registry import PromptNotFoundError, get_prompt_registry
 
 logger = logging.getLogger(__name__)
 
 # Broad, stable intent families. Add example utterances here instead of new
 # branch rules in the router. New phrasing is handled by semantic similarity.
+# Kept as an in-code default so the router remains usable when the prompt
+# registry is unavailable; the registry (prompts/intent_anchors/vN.yaml) is
+# consulted at construction time and overrides this baseline when present.
 INTENT_ANCHORS: dict[str, list[str]] = {
     "product_search": [
         "show me running shoes",
@@ -76,6 +80,39 @@ INTENT_ANCHORS: dict[str, list[str]] = {
     ],
 }
 
+
+def _load_intent_anchors_from_registry() -> tuple[dict[str, list[str]], str]:
+    """Load intent-anchor utterances from the prompt registry.
+
+    Returns ``(anchors, label)`` where ``label`` identifies the version used
+    (e.g. ``intent_anchors@v1``) or an empty string when the fallback constant
+    was used.
+    """
+    try:
+        tpl = get_prompt_registry().get("intent_anchors")
+    except PromptNotFoundError as exc:
+        logger.warning("prompt_registry intent_anchors miss: %s; using in-code default", exc)
+        return INTENT_ANCHORS, ""
+
+    payload = tpl.structured
+    if not isinstance(payload, dict):
+        logger.warning(
+            "prompt_registry intent_anchors expected 'structured: {intent: [utterances]}' "
+            "in %s; using in-code default",
+            tpl.metadata.get("path"),
+        )
+        return INTENT_ANCHORS, ""
+
+    parsed: dict[str, list[str]] = {}
+    for intent, utterances in payload.items():
+        if not isinstance(utterances, list) or not utterances:
+            continue
+        parsed[str(intent)] = [str(u) for u in utterances if isinstance(u, (str, int))]
+
+    if not parsed:
+        return INTENT_ANCHORS, ""
+    return parsed, tpl.label
+
 # Keyword fallback signals used only when embeddings are unavailable.
 _FALLBACK_KEYWORDS: dict[str, set[str]] = {
     "policy_support": {
@@ -108,6 +145,10 @@ class SemanticRouter:
 
     def __init__(self, min_confidence: float = 0.78) -> None:
         self._min_confidence = min_confidence
+        # Anchor utterances come from the prompt registry so intent phrasings can
+        # be versioned + A/B tested without a code deploy. Falls back to the
+        # in-code INTENT_ANCHORS default when the registry is unavailable.
+        self._anchors, self._anchors_label = _load_intent_anchors_from_registry()
         self._azure_ready = bool(
             settings.azure_openai_endpoint
             and settings.azure_openai_api_key
@@ -129,6 +170,11 @@ class SemanticRouter:
         self._lock = threading.Lock()
 
     @property
+    def anchors_label(self) -> str:
+        """Prompt-registry label for the intent anchors currently in use."""
+        return self._anchors_label
+
+    @property
     def mode(self) -> str:
         return "semantic" if self._azure_ready else "keyword"
 
@@ -148,10 +194,14 @@ class SemanticRouter:
         with self._lock:
             if self._loaded:
                 return
-            for intent, utterances in INTENT_ANCHORS.items():
+            for intent, utterances in self._anchors.items():
                 self._anchor_vectors[intent] = self._embed(utterances)
             self._loaded = True
-            logger.info("SemanticRouter anchors embedded for %d intents", len(self._anchor_vectors))
+            logger.info(
+                "SemanticRouter anchors embedded for %d intents (prompt=%s)",
+                len(self._anchor_vectors),
+                self._anchors_label or "builtin",
+            )
 
     def _keyword_classify(self, query: str) -> tuple[str, float]:
         normalized = re.sub(r"[^a-z0-9\s]", " ", query.lower())

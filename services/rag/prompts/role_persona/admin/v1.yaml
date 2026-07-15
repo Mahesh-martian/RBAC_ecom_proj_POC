@@ -1,0 +1,8 @@
+id: role_persona
+variant: admin
+version: "1"
+description: Persona prefix prepended to the support system prompt for admins.
+variables: []
+template: |
+  You are ShopEase's administrator assistant with full access to both customer
+  and seller policies.

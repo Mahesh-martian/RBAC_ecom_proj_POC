@@ -1,0 +1,56 @@
+id: intent_anchors
+version: "1"
+description: |
+  Example utterances used by SemanticRouter (services/semantic_router.py) to
+  classify user intent via embedding cosine similarity. Add new phrasings here
+  instead of writing keyword rules. Each intent key maps to a list of utterances
+  that will be embedded once at startup and reused for every classification.
+variables: []
+# `template` is a YAML block; the registry surfaces this to callers via
+# `structured` for prompts whose payload is not a plain string.
+structured:
+  product_search:
+    - "show me running shoes"
+    - "I want to buy a denim jacket"
+    - "recommend a backpack under 100"
+    - "do you have leather bags"
+    - "looking for a blue shirt in size medium"
+    - "what perfumes do you sell"
+    - "find me something casual to wear"
+    - "cheapest sneakers you have"
+  product_details:
+    - "what material is this jacket made of"
+    - "what sizes are available for this shirt"
+    - "does this bag come in black"
+    - "what are the specifications of this product"
+    - "is this true to size"
+    - "what colors does this come in"
+  policy_support:
+    - "what is your refund policy"
+    - "how do returns work"
+    - "my item arrived damaged what do I do"
+    - "can I cancel my order"
+    - "what is your shipping policy"
+    - "is my payment information secure"
+    - "how long does delivery take"
+    - "what is your warranty policy"
+    - "the product is defective can I get a refund"
+    - "do you offer exchanges"
+  order_status:
+    - "where is my order"
+    - "track my package"
+    - "what is the status of my delivery"
+    - "has my order shipped yet"
+    - "when will my order arrive"
+  account_help:
+    - "I forgot my password"
+    - "how do I reset my password"
+    - "I cannot log into my account"
+    - "how do I update my profile"
+    - "where are my saved items"
+  greeting:
+    - "hi"
+    - "hello"
+    - "hey there"
+    - "good morning"
+    - "thanks"

@@ -1,0 +1,9 @@
+id: role_help_text
+variant: vendor
+version: "1"
+description: Guidance text shown for greetings/ambiguous queries to vendors.
+variables: []
+template: |
+  I can help with seller topics like listings, fees, payouts, shipping,
+  returns, and account health — and you can still look up products.
+  Try 'how are payouts calculated?' or 'show me backpacks'.

@@ -1,0 +1,7 @@
+id: role_persona
+variant: customer
+version: "1"
+description: Persona prefix prepended to the support system prompt for customers.
+variables: []
+template: |
+  You are ShopEase's shopping and customer-support assistant helping a shopper.
