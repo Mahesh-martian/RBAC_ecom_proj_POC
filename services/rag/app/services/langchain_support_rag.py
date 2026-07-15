@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from openai import AzureOpenAI, BadRequestError
@@ -45,6 +45,11 @@ class LangChainSupportResult:
     # ``support_system@v2``. Empty string when the registry lookup fell back to
     # the hard-coded default.
     system_prompt_label: str = ""
+    # Raw retrieved passages (title/source/content/score) used to ground the
+    # answer. Populated for every RAG call; empty list on the no-context /
+    # early-return branches. Kept off the public HTTP response schema — this is
+    # only consumed by the offline RAGAS evaluator running in-process.
+    contexts: list[dict[str, object]] = field(default_factory=list)
 
 
 def _is_semantic_unsupported(exc: "HttpResponseError") -> bool:
@@ -426,6 +431,14 @@ class LangChainSupportRAGService:
         content = completion.choices[0].message.content or ""
         answer = content.strip() or "I do not have enough policy context to answer that yet."
 
+        # Full retrieved passages, exposed to the offline RAGAS evaluator so
+        # metrics such as faithfulness / context_precision can score the
+        # answer against the actual grounding content (not just citation labels).
+        contexts_payload: list[dict[str, object]] = [
+            {"title": t, "source": s, "content": c, "score": round(sc, 4)}
+            for (t, s, c, sc) in rows
+        ]
+
         return LangChainSupportResult(
             answer=answer,
             citations=citations,
@@ -438,4 +451,5 @@ class LangChainSupportRAGService:
             search_latency_ms=search_latency_ms,
             llm_latency_ms=llm_latency_ms,
             system_prompt_label=system_prompt_label,
+            contexts=contexts_payload,
         )

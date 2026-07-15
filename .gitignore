@@ -28,6 +28,9 @@ node_modules/
 .next/
 out/
 dist/
+
+# RAGAS evaluation outputs (report artifacts, not source of truth)
+services/rag/reports/
 build/
 .turbo/
 *.tsbuildinfo
