@@ -383,6 +383,75 @@ class ChatComparisonResponse(BaseModel):
     langchain: ChatProviderComparison
 
 
+# ============= RAGAS Admin Schemas =============
+
+class RagasRunRequest(BaseModel):
+    """Body for POST /admin/rag/ragas/run.
+
+    Every field mirrors a CLI flag on scripts/ragas_eval.py so the admin path
+    stays faithful to the offline runner.
+    """
+
+    limit: Optional[int] = Field(default=None, ge=1, description="Cap on cases evaluated.")
+    role: Optional[str] = Field(default=None, description="customer | vendor | admin")
+    include_stretch: bool = Field(default=False, description="Also run stretch_cases.")
+    skip_denied: bool = Field(default=False, description="Skip roles_denied (negative RBAC) replays.")
+    dry_run: bool = Field(default=False, description="Replay only; skip RAGAS metric scoring.")
+    metrics: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Subset of faithfulness/answer_relevancy/context_precision/"
+            "context_recall/answer_similarity. Defaults to settings.ragas_metrics."
+        ),
+    )
+    concurrency: int = Field(default=2, ge=1, le=8)
+    fail_on_threshold: bool = Field(
+        default=False,
+        description=(
+            "Mark the job failed when any replay row is below the configured "
+            "threshold. Useful for a 'before deploy' quality gate."
+        ),
+    )
+
+    @validator("role")
+    def _validate_role(cls, value):  # noqa: N805 - pydantic v1 style is required for older pydantic
+        if value is None:
+            return value
+        allowed = {"customer", "vendor", "admin"}
+        if value.lower() not in allowed:
+            raise ValueError(f"role must be one of {sorted(allowed)}")
+        return value.lower()
+
+
+class RagasJobSummaryResponse(BaseModel):
+    """Compact representation returned by list endpoints."""
+
+    id: str
+    status: str
+    submitted_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    error: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    total_cases: Optional[int] = None
+    replays_expected: Optional[int] = None
+    replays_completed: int = 0
+    report_summary: Optional[Dict[str, Any]] = None
+
+
+class RagasJobDetailResponse(RagasJobSummaryResponse):
+    """Full job payload including the report body when the job is completed."""
+
+    report_dir: Optional[str] = None
+    report: Optional[Dict[str, Any]] = None
+
+
+class RagasJobListResponse(BaseModel):
+    jobs: List[RagasJobSummaryResponse]
+    total: int
+
+
 # ============= Wishlist Schemas =============
 
 class WishlistAddRequest(BaseModel):
