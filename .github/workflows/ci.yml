@@ -49,7 +49,7 @@ jobs:
         run: pytest -q
 
   rag-api:
-    name: rag-api (lint + tests)
+    name: rag-api (lint + tests + RAG smoke)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -69,6 +69,23 @@ jobs:
         run: ruff check app || true
       - name: Run tests
         run: pytest -q
+      # Plumbing smoke: exercises the RAGAS CLI end-to-end (dataset load, prompt
+      # registry lookups, in-process RAG call, report writer). Runs in --dry-run
+      # so no Azure credentials are required and exit code is not gated on
+      # metric thresholds \u2014 we only assert the CLI itself is healthy. The full
+      # scored eval with --fail-on-threshold lives in .github/workflows/rag-eval.yml
+      # (scheduled + manual).
+      - name: RAG plumbing smoke (dry-run)
+        run: |
+          python scripts/ragas_eval.py --dry-run --limit 2 --skip-denied --verbose
+      - name: Upload plumbing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-plumbing-report
+          path: services/rag/reports/ragas/
+          if-no-files-found: ignore
+          retention-days: 7
 
   frontend:
     name: frontend (lint + build)
